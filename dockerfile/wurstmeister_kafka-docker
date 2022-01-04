@@ -1,0 +1,57 @@
+# https://github.com/wurstmeister/kafka-docker/blob/master/Dockerfile
+
+# 원본 이미지
+FROM azul/zulu-openjdk-alpine:8u292-8.54.0.21
+
+# ARG는 docker 파일을 build하는 경우 ARG 값으로 전달을 받거나 기본값을 지정하는 것이 가능
+# kafka_version을 변경하고자 하는 경우 ex) docker build --build-arg kafka_version=2.8.0 과 같이 사용 가능
+ARG kafka_version=2.8.1
+ARG scala_version=2.13
+ARG glibc_version=2.31-r0
+ARG vcs_ref=unspecified
+ARG build_date=unspecified
+
+# LABEL 단순하게 이미지의 버전 정보, 작성자, 코멘트 등 이미지의 상세 정보를 기록하기 위해 사용
+LABEL org.label-schema.name="kafka" \
+      org.label-schema.description="Apache Kafka" \
+      org.label-schema.build-date="${build_date}" \
+      org.label-schema.vcs-url="https://github.com/wurstmeister/kafka-docker" \
+      org.label-schema.vcs-ref="${vcs_ref}" \
+      org.label-schema.version="${scala_version}_${kafka_version}" \
+      org.label-schema.schema-version="1.0" \
+      maintainer="wurstmeister"
+
+# ENV는 docker container에서 사용될 환경 변수를 지정
+# $를 통해 변수형식으로 지정하는 것도 가능
+ENV KAFKA_VERSION=$kafka_version \
+    SCALA_VERSION=$scala_version \
+    KAFKA_HOME=/opt/kafka \
+    GLIBC_VERSION=$glibc_version
+
+ENV PATH=${PATH}:${KAFKA_HOME}/bin
+
+# COPY는 로컬에 있는 파일을 읽어 이미지에 복사하는 역할로 image에 필수적인 파일들을 COPY하는 형식으로 사용
+COPY download-kafka.sh start-kafka.sh broker-list.sh create-topics.sh versions.sh /tmp/
+
+# RUN은 image내부에서 실행될 명령어에 대한 내용을 정리하며,
+# 설치가 필요한 패키지나 라이브러리, 불필요한 내용을 삭제하는 등의 작업을 할 때 주로 사용
+RUN apk add --no-cache bash curl jq docker \
+ && chmod a+x /tmp/*.sh \
+ && mv /tmp/start-kafka.sh /tmp/broker-list.sh /tmp/create-topics.sh /tmp/versions.sh /usr/bin \
+ && sync && /tmp/download-kafka.sh \
+ && tar xfz /tmp/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz -C /opt \
+ && rm /tmp/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz \
+ && ln -s /opt/kafka_${SCALA_VERSION}-${KAFKA_VERSION} ${KAFKA_HOME} \
+ && rm /tmp/* \
+ && wget https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VERSION}/glibc-${GLIBC_VERSION}.apk \
+ && apk add --no-cache --allow-untrusted glibc-${GLIBC_VERSION}.apk \
+ && rm glibc-${GLIBC_VERSION}.apk
+
+COPY overrides /opt/overrides
+
+# Docker run시 -v 옵션과 같이 호스트와 공유할 컨테이너 내부 디렉토리에 대한 설정
+VOLUME ["/kafka"]
+
+# Use "exec" form so that it runs as PID 1 (useful for graceful shutdown)
+# CMD는 컨테이너가 실행될 때의 명령어 이전에 살펴보았던 mysql이나 wordpress와 같이 -d 옵션을 사용해도 container 내부의 서비스가 올라올 수 있게 함
+CMD ["start-kafka.sh"]
