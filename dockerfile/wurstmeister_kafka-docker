@@ -1,9 +1,11 @@
 # https://github.com/wurstmeister/kafka-docker/blob/master/Dockerfile
 
-# 원본 이미지
+# 새로운 image를 만드는데 기반이 되는 이미지를 설정
+# 보통 os관련 이미지나 필수 패키지가 들어가 있는 image를 이용
 FROM azul/zulu-openjdk-alpine:8u292-8.54.0.21
 
 # ARG는 docker 파일을 build하는 경우 ARG 값으로 전달을 받거나 기본값을 지정하는 것이 가능
+# ARG는 image를 만드는 경우 커스텀 가능
 # kafka_version을 변경하고자 하는 경우 ex) docker build --build-arg kafka_version=2.8.0 과 같이 사용 가능
 ARG kafka_version=2.8.1
 ARG scala_version=2.13
@@ -22,7 +24,8 @@ LABEL org.label-schema.name="kafka" \
       maintainer="wurstmeister"
 
 # ENV는 docker container에서 사용될 환경 변수를 지정
-# $를 통해 변수형식으로 지정하는 것도 가능
+# $를 통해 변수형식을 지정하는 것도 가능
+# 환경변수의 경우 docker container를 올릴 때 -e 옵션으로 추가적으로 설정이 가능하며 image를 만들 때 사용하는 것은 기본값을 넣는 느낌
 ENV KAFKA_VERSION=$kafka_version \
     SCALA_VERSION=$scala_version \
     KAFKA_HOME=/opt/kafka \

@@ -1,0 +1,16 @@
+FROM ubuntu:14.04
+
+# apt-get으로 apache2 설치
+RUN apt-get update
+RUN apt-get install apache2 -y
+ADD test.html /var/www/html
+# ls를 한다는 것의 의미로 RUN, 혹은 CMD명령어가 실행되는 경로가 지정된다고 생각하면 될 것 같음
+# 실제로 container를 실행하는 경우에도 /var/www/html 경로가 지정
+WORKDIR /var/www/html
+RUN ["/bin/bash", "-c", "echo hello >> test2.html"]
+# container의 80 port를 열어두고 host port는 container이 생성될 때 할당
+# EXPOSE 80 80으로 하는 경우 -p 80:80을 사용하는 것과 동일
+EXPOSE 80
+
+# container이 실행되는 경우 실행되는 명령어로 apachectl이 실행되며 container 80포트와 연결되는 host포트로 접근 가능
+CMD apachectl -DFOREGROUND
