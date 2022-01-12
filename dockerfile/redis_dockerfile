@@ -1,0 +1,122 @@
+# 레디스 Dockerfile
+# https://github.com/docker-library/redis/blob/master/Dockerfile-alpine.template
+
+# FROM: alpine 이미지를 기반 이미지로 사용한다
+FROM alpine:3.15
+
+# RUN: 이미지를 생성할 때 실행할 코드를 지정
+# add our user and group first to make sure their IDs get assigned consistently, regardless of whatever dependencies get added
+# 추가되는 종속성에 관계없이 ID가 일관되게 할당되도록 사용자와 그룹을 먼저 추가하십시오.
+RUN addgroup -S -g 1000 redis && adduser -S -G redis -u 999 redis
+# alpine already has a gid 999, so we'll use the next id
+
+# apk 명령어: alpine에서도 yum, apt와 같은 패키지 매니저를 사용할 수 있는 명령어
+# 타임존을 설정하기 위해서는 tzdata 패키지가 필요하다.
+RUN apk add --no-cache \
+# grab su-exec for easy step-down from root
+		'su-exec>=0.2' \
+# add tzdata for https://github.com/docker-library/redis/issues/138
+		tzdata
+
+# ENV: 환경변수
+ENV REDIS_VERSION placeholder
+ENV REDIS_DOWNLOAD_URL placeholder
+ENV REDIS_DOWNLOAD_SHA placeholder
+
+RUN set -eux; \
+	\
+	apk add --no-cache --virtual .build-deps \
+		coreutils \
+		dpkg-dev dpkg \
+		gcc \
+		linux-headers \
+		make \
+		musl-dev \
+		openssl-dev \
+# install real "wget" to avoid:
+#   + wget -O redis.tar.gz https://download.redis.io/releases/redis-6.0.6.tar.gz
+#   Connecting to download.redis.io (45.60.121.1:80)
+#   wget: bad header line:     XxhODalH: btu; path=/; Max-Age=900
+		wget \
+	; \
+	\
+	wget -O redis.tar.gz "$REDIS_DOWNLOAD_URL"; \
+	echo "$REDIS_DOWNLOAD_SHA *redis.tar.gz" | sha256sum -c -; \
+	mkdir -p /usr/src/redis; \
+	tar -xzf redis.tar.gz -C /usr/src/redis --strip-components=1; \
+	rm redis.tar.gz; \
+	\
+# disable Redis protected mode [1] as it is unnecessary in context of Docker
+# (ports are not automatically exposed when running inside Docker, but rather explicitly by specifying -p / -P)
+# [1]: https://github.com/redis/redis/commit/edd4d555df57dc84265fdfb4ef59a4678832f6da
+##<protected-mode-sed>##
+	grep -E '^ *createBoolConfig[(]"protected-mode",.*, *1 *,.*[)],$' /usr/src/redis/src/config.c; \
+	sed -ri 's!^( *createBoolConfig[(]"protected-mode",.*, *)1( *,.*[)],)$!\10\2!' /usr/src/redis/src/config.c; \
+	grep -E '^ *createBoolConfig[(]"protected-mode",.*, *0 *,.*[)],$' /usr/src/redis/src/config.c; \
+##</protected-mode-sed>##
+# for future reference, we modify this directly in the source instead of just supplying a default configuration flag because apparently "if you specify any argument to redis-server, [it assumes] you are going to specify everything"
+# see also https://github.com/docker-library/redis/issues/4#issuecomment-50780840
+# (more exactly, this makes sure the default behavior of "save on SIGTERM" stays functional by default)
+	\
+# https://github.com/jemalloc/jemalloc/issues/467 -- we need to patch the "./configure" for the bundled jemalloc to match how Debian compiles, for compatibility
+# (also, we do cross-builds, so we need to embed the appropriate "--build=xxx" values to that "./configure" invocation)
+	gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)"; \
+	extraJemallocConfigureFlags="--build=$gnuArch"; \
+# https://salsa.debian.org/debian/jemalloc/-/blob/c0a88c37a551be7d12e4863435365c9a6a51525f/debian/rules#L8-23
+	dpkgArch="$(dpkg --print-architecture)"; \
+	case "${dpkgArch##*-}" in \
+		amd64 | i386 | x32) extraJemallocConfigureFlags="$extraJemallocConfigureFlags --with-lg-page=12" ;; \
+		*) extraJemallocConfigureFlags="$extraJemallocConfigureFlags --with-lg-page=16" ;; \
+	esac; \
+	extraJemallocConfigureFlags="$extraJemallocConfigureFlags --with-lg-hugepage=21"; \
+	grep -F 'cd jemalloc && ./configure ' /usr/src/redis/deps/Makefile; \
+	sed -ri 's!cd jemalloc && ./configure !&'"$extraJemallocConfigureFlags"' !' /usr/src/redis/deps/Makefile; \
+	grep -F "cd jemalloc && ./configure $extraJemallocConfigureFlags " /usr/src/redis/deps/Makefile; \
+	\
+	export BUILD_TLS=yes; \
+	make -C /usr/src/redis -j "$(nproc)" all; \
+	make -C /usr/src/redis install; \
+	\
+# TODO https://github.com/redis/redis/pull/3494 (deduplicate "redis-server" copies)
+	serverMd5="$(md5sum /usr/local/bin/redis-server | cut -d' ' -f1)"; export serverMd5; \
+	find /usr/local/bin/redis* -maxdepth 0 \
+		-type f -not -name redis-server \
+		-exec sh -eux -c ' \
+			md5="$(md5sum "$1" | cut -d" " -f1)"; \
+			test "$md5" = "$serverMd5"; \
+		' -- '{}' ';' \
+		-exec ln -svfT 'redis-server' '{}' ';' \
+	; \
+	\
+	rm -r /usr/src/redis; \
+	\
+	runDeps="$( \
+		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local \
+			| tr ',' '\n' \
+			| sort -u \
+			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+	)"; \
+	apk add --no-network --virtual .redis-rundeps $runDeps; \
+	apk del --no-network .build-deps; \
+	\
+	redis-cli --version; \
+	redis-server --version
+
+RUN mkdir /data && chown redis:redis /data
+
+# VOLUME: 컨테이너의 볼륨 지정
+VOLUME /data
+
+# WORKDIR : 명령어를 실행할 디렉터리
+WORKDIR /data
+
+COPY docker-entrypoint.sh /usr/local/bin/
+
+# ENTRYPOINT, CMD : 컨테이너가 시작 시 스크립트 및 명령어 실행
+# 차이점: ENTRYPOINT - 지정한 명령을 수행되도록 지정 된다. CMD - 컨테이너를 실행할때 인자값을 주게 되면 CMD 값을 대신 하여 지정한 인자값으로 변경하여 실행되게 된다.
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# EXPOSE : Dockerfile의 빌드로 생성된 이미지에서 노출할 포트를 설정
+EXPOSE 6379
+
+CMD ["redis-server"]
