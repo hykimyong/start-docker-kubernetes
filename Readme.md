@@ -9,3 +9,4 @@
 
 ### ETC 링크
 - [쿠버네티스 책에서 사용되는 예제를 정리한 저장소](https://github.com/alicek106/start-docker-kubernetes)
+- [도커 이미지 잘 만드는 방법](https://jonnung.dev/docker/2020/04/08/optimizing-docker-images/)
